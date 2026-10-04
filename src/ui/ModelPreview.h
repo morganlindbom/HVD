@@ -89,6 +89,16 @@ class ModelPreview : public QOpenGLWidget, protected QOpenGLFunctions {
      * functions.
      */
     void showPads(bool visible);
+    /** Highlight a physical record selected in the linked 2D viewport.
+     *
+     * Uses source-array identity without emitting a feedback signal.
+     */
+    void selectPad(int index);
+    /** Return the selected physical record index.
+     *
+     * Exposes linked selection independently of number labels.
+     */
+    int selectedPad() const;
   signals:
     /** Notify presentation when a physical marker is selected.
      *

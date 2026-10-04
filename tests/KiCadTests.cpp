@@ -177,6 +177,11 @@ class KiCadTests : public QObject {
      */
     void actualLibrary() {
         QString root = QString::fromUtf8(KICAD_ROOT);
+        // Installed resources may be copied with their versioned parent directory.
+        //
+        // This test still targets the same real fixture without altering application configuration.
+        if (!QDir(root + "/footprints").exists() && QDir(root + "/9.0/share/kicad").exists())
+            root += "/9.0/share/kicad";
         QString name = "R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal";
         auto path = QDir(root).filePath("footprints/Resistor_THT.pretty/" + name + ".kicad_mod");
         if (!QFileInfo::exists(path))

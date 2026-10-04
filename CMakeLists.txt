@@ -16,10 +16,10 @@ target_include_directories(hvd_components_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(hvd_components_core PUBLIC Qt6::Core)
 
 set(HVD_KICAD_DEVELOPMENT_ROOT "" CACHE PATH "Explicit source-tree KiCad root for development only")
-add_library(hvd_kicad src/storage/KiCadLibrary.h src/storage/KiCadLibrary.cpp src/storage/VrmlGeometry.cpp)
+add_library(hvd_kicad src/storage/FootprintGeometry.h src/storage/FootprintGeometry.cpp src/storage/KiCadLibrary.h src/storage/KiCadLibrary.cpp src/storage/VrmlGeometry.cpp)
 target_include_directories(hvd_kicad PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(hvd_kicad PUBLIC Qt6::Core Qt6::Gui)
-add_library(hvd_components_ui src/ui/MainWindow.cpp src/ui/MainWindow.h
+add_library(hvd_components_ui src/ui/FootprintPreview.cpp src/ui/FootprintPreview.h src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/ComponentEditor.cpp src/ui/ComponentEditor.h src/ui/KiCadBrowser.cpp src/ui/KiCadBrowser.h
     src/ui/ModelPreview.cpp src/ui/ModelPreview.h
     src/ui/DemoBoardGeometry.cpp src/ui/DemoBoardGeometry.h)
@@ -41,6 +41,10 @@ foreach(target hvd_kicad hvd_components_core hvd_components_ui hvd_component_man
 endforeach()
 if(BUILD_TESTING)
     find_package(Qt6 REQUIRED COMPONENTS Test)
+    add_executable(footprint_tests tests/FootprintTests.cpp)
+    target_link_libraries(footprint_tests PRIVATE hvd_components_ui Qt6::Test)
+    target_compile_definitions(footprint_tests PRIVATE KICAD_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/kicad")
+    add_test(NAME footprint-tests COMMAND footprint_tests)
     add_executable(kicad_tests tests/KiCadTests.cpp)
     target_link_libraries(kicad_tests PRIVATE hvd_components_ui Qt6::Test)
     target_compile_definitions(kicad_tests PRIVATE KICAD_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/kicad")
@@ -58,6 +62,6 @@ if(BUILD_TESTING)
     target_compile_definitions(model_preview_tests PRIVATE BUNDLED_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/resources/components")
     add_test(NAME model-preview-tests COMMAND model_preview_tests)
     if(WIN32)
-        set_tests_properties(kicad-tests ui-smoke model-preview-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows")
+        set_tests_properties(footprint-tests kicad-tests ui-smoke model-preview-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows")
     endif()
 endif()

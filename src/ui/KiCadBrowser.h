@@ -1,5 +1,6 @@
 // KiCadBrowser.h
 #pragma once
+#include "storage/FootprintGeometry.h"
 #include "storage/KiCadLibrary.h"
 #include <QWidget>
 class QComboBox;
@@ -11,6 +12,7 @@ class QPushButton;
 class QCheckBox;
 namespace hvd {
 class ModelPreview;
+class FootprintPreview;
 class KiCadBrowser : public QWidget {
     Q_OBJECT
   public:
@@ -84,5 +86,18 @@ class KiCadBrowser : public QWidget {
     QPushButton *previous_, *next_;
     QCheckBox *additional_;
     ModelPreview *preview_;
+    FootprintPreview *footprint_;
+    QWidget *layerControls_;
+    QLabel *footprintDiagnostics_;
+    /** Publish one footprint's layer legend and diagnostics.
+     *
+     * Source geometry remains immutable while checkboxes control presentation.
+     */
+    void publishFootprint(const KiCadFootprint &footprint, const FootprintDrawing &drawing);
+    /** Inspect and synchronize the selected source pad record.
+     *
+     * Both views use array identity rather than potentially repeated pad numbers.
+     */
+    void selectPad(int index);
 };
 } // namespace hvd

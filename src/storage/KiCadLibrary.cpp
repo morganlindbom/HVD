@@ -181,6 +181,88 @@ QString readText(const QString &path) {
         fail("File exceeds 32 MiB parser limit: " + path);
     return QString::fromUtf8(f.readAll());
 }
+/** Read supported graphic fields from their structural expression.
+ *
+ * Positions remain native KiCad millimetres; omitted or unsupported geometry is
+ * diagnosed explicitly instead of replaced by a plausible outline.
+ */
+KiCadGraphic graphic(const Expression &n, const QString &kind, QStringList &diagnostics) {
+    KiCadGraphic g;
+    g.kind = kind;
+    if (auto layer = child(n, "layer"))
+        g.layer = atom(*layer, 1);
+    else
+        fail("Missing layer for " + kind);
+    if (auto stroke = child(n, "stroke")) {
+        if (auto width = child(*stroke, "width"))
+            g.width = number(*width, 1);
+        if (auto type = child(*stroke, "type"))
+            g.stroke = atom(*type, 1);
+    } else if (auto width = child(n, "width"))
+        g.width = number(*width, 1);
+    if (g.width < 0)
+        fail("Negative graphic stroke width.");
+    if (auto fill = child(n, "fill")) {
+        const auto value = atom(*fill, 1);
+        g.filled = value == "solid" || value == "yes";
+        if (!QStringList{"solid", "yes", "none", "no"}.contains(value))
+            diagnostics.append("Incomplete 2D preview: unsupported fill " + value);
+    }
+    if (kind == "fp_line" || kind == "fp_rect")
+        g.points = {xy(n, "start"), xy(n, "end")};
+    else if (kind == "fp_circle")
+        g.points = {xy(n, "center"), xy(n, "end")};
+    else if (kind == "fp_arc") {
+        if (!child(n, "mid")) {
+            diagnostics.append("Incomplete 2D preview: legacy centre/angle arc is unsupported.");
+            g.kind.clear();
+        } else
+            g.points = {xy(n, "start"), xy(n, "mid"), xy(n, "end")};
+    } else if (kind == "fp_poly") {
+        auto pts = child(n, "pts");
+        if (!pts)
+            fail("Polygon missing pts list.");
+        for (const auto &pt : pts->children)
+            if (pt.list && atom(pt, 0) == "xy")
+                g.points.append({number(pt, 1), number(pt, 2)});
+            else if (pt.list) {
+                diagnostics.append("Incomplete 2D preview: polygon curves are unsupported.");
+                g.kind.clear();
+            }
+        if (g.points.size() < 3)
+            fail("Polygon requires at least three XY points.");
+    } else {
+        g.kind = "text";
+        g.text = atom(n, 2);
+        diagnostics.append("Text uses a Qt font approximation, not KiCad stroke-font glyphs.");
+        if (g.text.contains("${"))
+            diagnostics.append(
+                "Text variables are displayed literally; no project substitutions are inferred.");
+        g.points = {xy(n, "at")};
+        if (auto at = child(n, "at"); at->children.size() > 3)
+            g.rotation = number(*at, 3);
+        if (auto effects = child(n, "effects")) {
+            if (auto font = child(*effects, "font")) {
+                g.textSize = xy(*font, "size");
+                if (g.textSize.x() <= 0 || g.textSize.y() <= 0)
+                    fail("Text dimensions must be positive.");
+                diagnostics.append("Text uses a Qt font approximation, not KiCad stroke-font glyphs.");
+            }
+            if (auto justify = child(*effects, "justify"))
+                for (int i = 1; i < justify->children.size(); ++i)
+                    g.justification.append(atom(*justify, i));
+            if (auto hide = child(*effects, "hide"))
+                g.hidden = hide->children.size() == 1 || atom(*hide, 1) == "yes";
+        }
+        if (auto hide = child(n, "hide"))
+            g.hidden = hide->children.size() == 1 || atom(*hide, 1) == "yes";
+        for (const auto &a : n.children)
+            if (!a.list && a.atom == "hide")
+                g.hidden = true;
+        g.mirrored = g.justification.contains("mirror");
+    }
+    return g;
+}
 } // namespace
 /** Parse a standalone footprint tree.
  *
@@ -213,10 +295,49 @@ KiCadFootprint parseFootprint(const QString &text, const QString &path) {
             auto at = child(n, "at");
             if (at->children.size() > 3)
                 p.rotation = number(*at, 3);
-            f.pads.append(p);
-            if (p.shape == "custom" || p.shape == "trapezoid")
+            if (auto layers = child(n, "layers"))
+                for (int i = 1; i < layers->children.size(); ++i)
+                    p.layers.append(atom(*layers, i));
+            else
                 f.diagnostics.append("Pad " + p.number +
-                                     ": complex outline not rendered; connection marker only.");
+                                     ": missing layer information; 2D uses an Unknown layer.");
+            if (auto drill = child(n, "drill")) {
+                p.hasDrill = true;
+                bool oval = atom(*drill, 1) == "oval";
+                double d = number(*drill, oval ? 2 : 1);
+                p.drillSize = {d, oval ? number(*drill, 3) : d};
+                if (p.drillSize.x() <= 0 || p.drillSize.y() <= 0)
+                    fail("Drill dimensions must be positive.");
+                if (child(*drill, "offset"))
+                    p.drillOffset = xy(*drill, "offset");
+            }
+            p.supportedShape = QStringList{"rect", "circle", "oval", "roundrect"}.contains(p.shape);
+            if (p.shape == "roundrect") {
+                auto ratio = child(n, "roundrect_rratio");
+                if (!ratio)
+                    p.supportedShape = false;
+                else {
+                    p.roundRatio = number(*ratio, 1);
+                    if (p.roundRatio < 0 || p.roundRatio > .5)
+                        fail("Roundrect ratio must be between 0 and 0.5.");
+                }
+            }
+            if ((p.shape == "circle" && std::abs(p.size.x() - p.size.y()) > 1e-6) || child(n, "chamfer") ||
+                child(n, "rect_delta"))
+                p.supportedShape = false;
+            if (!p.supportedShape)
+                f.diagnostics.append("Incomplete 2D preview: pad record " + QString::number(f.pads.size()) +
+                                     " (" + p.number + ") unsupported shape/outline " + p.shape +
+                                     "; only origin and drill are shown.");
+            f.pads.append(p);
+        } else if (QStringList{"fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_text"}.contains(
+                       tag) ||
+                   (tag == "property" && QStringList{"Reference", "Value"}.contains(atom(n, 1)))) {
+            auto g = graphic(n, tag, f.diagnostics);
+            if (!g.kind.isEmpty())
+                f.graphics.append(g);
+        } else if (tag.startsWith("fp_") || tag == "zone" || tag == "image") {
+            f.diagnostics.append("Incomplete 2D preview: unsupported footprint construct " + tag);
         } else if (tag == "model") {
             KiCadModel m;
             m.reference = atom(n, 1);
@@ -372,13 +493,19 @@ QMatrix4x4 kiCadPlacement(const KiCadModel &model) {
  * Errors clear all returned vertices; no procedural substitute or component
  * registration occurs.
  */
-ImportedGeometry loadKiCadGeometry(const QString &root, const KiCadEntry &entry, const Cancellation &cancel) {
+/** Load one source with optional already-parsed footprint records.
+ *
+ * UI callers avoid re-reading footprint files; the legacy public entry point
+ * retains independent loading for direct models and callers without metadata.
+ */
+static ImportedGeometry loadSource(const QString &root, const KiCadEntry &entry, const Cancellation &cancel,
+                                   const KiCadFootprint *parsed) {
     ImportedGeometry result;
     result.title = entry.library + ":" + entry.name;
     try {
         QVector<KiCadModel> models;
         if (entry.kind == "footprint") {
-            auto f = loadFootprint(entry.path);
+            auto f = parsed ? *parsed : loadFootprint(entry.path);
             result.pads = f.pads;
             result.diagnostics = f.diagnostics;
             models = f.models;
@@ -432,5 +559,20 @@ ImportedGeometry loadKiCadGeometry(const QString &root, const KiCadEntry &entry,
         result.error = QString::fromUtf8(e.what());
     }
     return result;
+}
+/** Load a source through the normal parser and model resolver.
+ *
+ * Direct model selections do not imply footprint associations.
+ */
+ImportedGeometry loadKiCadGeometry(const QString &root, const KiCadEntry &entry, const Cancellation &cancel) {
+    return loadSource(root, entry, cancel, nullptr);
+}
+/** Load real models using the footprint shared by both previews.
+ *
+ * Independent 2D records survive missing assets and unsupported model formats.
+ */
+ImportedGeometry loadFootprintModels(const QString &root, const KiCadFootprint &footprint,
+                                     const Cancellation &cancel) {
+    return loadSource(root, {"footprint", "", footprint.name, footprint.path}, cancel, &footprint);
 }
 } // namespace hvd

@@ -16,6 +16,18 @@ struct KiCadPad {
     QString number, type, shape;
     QPointF position, size;
     double rotation = 0;
+    QStringList layers;
+    QPointF drillSize, drillOffset;
+    bool hasDrill = false, supportedShape = true;
+    double roundRatio = 0;
+};
+struct KiCadGraphic {
+    QString kind, layer, text, stroke = "solid";
+    QVector<QPointF> points;
+    double width = .15, rotation = 0;
+    QPointF textSize{1, 1};
+    bool filled = false, mirrored = false, hidden = false;
+    QStringList justification;
 };
 struct KiCadModel {
     QString reference;
@@ -26,6 +38,7 @@ struct KiCadFootprint {
     QString name, description, path;
     QVector<KiCadPad> pads;
     QVector<KiCadModel> models;
+    QVector<KiCadGraphic> graphics;
     QStringList diagnostics;
 };
 struct KiCadEntry {
@@ -94,4 +107,10 @@ QVector<ModelVertex> loadVrml(const QString &path, const QMatrix4x4 &placement, 
  * parsing is never claimed.
  */
 ImportedGeometry loadKiCadGeometry(const QString &root, const KiCadEntry &entry, const Cancellation &cancel);
+/** Load models from already parsed footprint metadata.
+ *
+ * Both previews share these records; model errors never discard 2D geometry.
+ */
+ImportedGeometry loadFootprintModels(const QString &root, const KiCadFootprint &footprint,
+                                     const Cancellation &cancel);
 } // namespace hvd

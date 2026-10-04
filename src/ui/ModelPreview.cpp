@@ -388,18 +388,20 @@ void ModelPreview::resizeGL(int width, int height) {
 void ModelPreview::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
         if (padsVisible_ && imported_ && hasModel()) {
-            int nearest = -1;
+            QVector<int> hits;
             double best = 18;
             for (int i = 0; i < pads_.size(); ++i) {
                 double d = QLineF(event->position(), padScreenPosition(i)).length();
-                if (d < best) {
+                if (d < best - .5) {
                     best = d;
-                    nearest = i;
-                }
+                    hits = {i};
+                } else if (d < 18 && std::abs(d - best) <= .5)
+                    hits.append(i);
             }
-            if (nearest >= 0) {
-                selectedPad_ = nearest;
-                emit padSelected(nearest);
+            if (!hits.isEmpty()) {
+                int current = hits.indexOf(selectedPad_);
+                selectedPad_ = hits[(current + 1) % hits.size()];
+                emit padSelected(selectedPad_);
                 update();
             }
         }
@@ -459,4 +461,17 @@ void ModelPreview::cleanup() {
     ready_ = false;
     uploadPending_ = true;
 }
+/** Highlight a shared source-record index.
+ *
+ * Selection updates presentation only and never changes the orbit camera.
+ */
+void ModelPreview::selectPad(int index) {
+    selectedPad_ = index >= 0 && index < pads_.size() ? index : -1;
+    update();
+}
+/** Return linked physical pad identity.
+ *
+ * Repeated number labels do not influence this index.
+ */
+int ModelPreview::selectedPad() const { return selectedPad_; }
 } // namespace hvd

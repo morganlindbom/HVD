@@ -1,5 +1,6 @@
 // KiCadBrowser.cpp
 #include "KiCadBrowser.h"
+#include "FootprintPreview.h"
 #include "ModelPreview.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -8,10 +9,12 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QGridLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -19,13 +22,17 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QtConcurrent>
+#include <algorithm>
+
 namespace hvd {
 namespace {
 struct Selection {
     KiCadEntry entry;
     KiCadFootprint footprint;
     ImportedGeometry geometry;
+    FootprintDrawing drawing;
 };
+
 /** Escape source text for a read-only detail panel.
  *
  * Paths and library descriptions must not introduce HTML or active document
@@ -33,6 +40,7 @@ struct Selection {
  */
 QString safe(const QString &text) { return text.toHtmlEscaped(); }
 } // namespace
+
 /** Construct a separate KiCad source browser.
  *
  * Catalogue packages stay under their existing validation authority and are
@@ -96,10 +104,56 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
     detail_ = new QTextBrowser(split);
     detail_->setObjectName("kiCadDetails");
     detail_->setOpenLinks(false);
-    auto panel = new QWidget(split);
+    auto container = new QWidget(split);
+    auto containerLayout = new QVBoxLayout(container);
+    containerLayout->setContentsMargins(0, 0, 0, 0);
+    auto previews = new QSplitter(Qt::Horizontal, container);
+    previews->setObjectName("kiCadPreviewSplitter");
+    containerLayout->addWidget(previews, 1);
+    auto flatPanel = new QWidget(previews);
+    auto flatLayout = new QVBoxLayout(flatPanel);
+    flatLayout->setContentsMargins(4, 0, 4, 0);
+    flatLayout->addWidget(new QLabel("<h2>Footprint Preview — 2D</h2>", flatPanel));
+    footprint_ = new FootprintPreview(flatPanel);
+    flatLayout->addWidget(footprint_, 1);
+    auto flatControls = new QHBoxLayout;
+    auto flatReset = new QPushButton("Reset", flatPanel);
+    auto flatFit = new QPushButton("Fit", flatPanel);
+    auto grid = new QCheckBox("Grid", flatPanel);
+    grid->setChecked(true);
+    auto back = new QCheckBox("Back view", flatPanel);
+    flatControls->addWidget(flatReset);
+    flatControls->addWidget(flatFit);
+    flatControls->addWidget(grid);
+    flatControls->addWidget(back);
+    flatLayout->addLayout(flatControls);
+    flatFit->setObjectName("footprintFit");
+    flatReset->setObjectName("footprintReset");
+    grid->setObjectName("footprintGrid");
+    back->setObjectName("footprintBack");
+    flatLayout->addWidget(new QLabel("Wheel: zoom · Middle/right drag: pan · Click: select pad", flatPanel));
+    auto legend = new QScrollArea(flatPanel);
+    legend->setWidgetResizable(true);
+    legend->setMaximumHeight(90);
+    legend->setMinimumHeight(62);
+    layerControls_ = new QWidget(legend);
+    layerControls_->setObjectName("footprintLayers");
+    new QGridLayout(layerControls_);
+    legend->setWidget(layerControls_);
+    flatLayout->addWidget(legend);
+    footprintDiagnostics_ = new QLabel(flatPanel);
+    footprintDiagnostics_->setWordWrap(true);
+    footprintDiagnostics_->setObjectName("footprintDiagnostics");
+    flatLayout->addWidget(footprintDiagnostics_);
+    connect(flatFit, &QPushButton::clicked, footprint_, &FootprintPreview::fitToView);
+    connect(flatReset, &QPushButton::clicked, footprint_, &FootprintPreview::resetView);
+    connect(grid, &QCheckBox::toggled, footprint_, &FootprintPreview::showGrid);
+    connect(back, &QCheckBox::toggled, footprint_, &FootprintPreview::showBack);
+    connect(footprint_, &FootprintPreview::padSelected, this, &KiCadBrowser::selectPad);
+    auto panel = new QWidget(previews);
     auto view = new QVBoxLayout(panel);
     view->setContentsMargins(4, 0, 0, 0);
-    view->addWidget(new QLabel("<h2>Model Preview</h2>", panel));
+    view->addWidget(new QLabel("<h2>Model Preview — 3D</h2>", panel));
     preview_ = new ModelPreview(panel);
     preview_->setObjectName("kiCadPreview");
     view->addWidget(preview_, 1);
@@ -119,7 +173,7 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
     padInfo_->setObjectName("kiCadPadInfo");
     padInfo_->setWordWrap(true);
     view->addWidget(padInfo_);
-    split->setSizes({280, 390, 620});
+    split->setSizes({210, 220, 960});
     split->setStretchFactor(2, 3);
     layout->addWidget(split, 1);
     auto pages = new QHBoxLayout;
@@ -154,18 +208,10 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
     connect(reset, &QPushButton::clicked, preview_, &ModelPreview::resetView);
     connect(fit, &QPushButton::clicked, preview_, &ModelPreview::fitToView);
     connect(pads, &QCheckBox::toggled, preview_, &ModelPreview::showPads);
-    // Inspect selected physical markers.
-    //
-    // Numbers are source identifiers and do not imply electrical functions.
-    connect(preview_, &ModelPreview::padSelected, this, [this](int i) {
-        const auto &p = preview_->pads().at(i);
-        padInfo_->setText(QString("Pad %1 · footprint (%2, %3) mm · %4 / %5 · rotation %6°")
-                              .arg(p.number.isEmpty() ? "(unnumbered)" : p.number)
-                              .arg(p.position.x())
-                              .arg(p.position.y())
-                              .arg(p.type, p.shape)
-                              .arg(p.rotation));
-    });
+    connect(preview_, &ModelPreview::padSelected, this, &KiCadBrowser::selectPad);
+    previews->setSizes({450, 450});
+    previews->setStretchFactor(0, 1);
+    previews->setStretchFactor(1, 1);
     // Persist a user-selected external root.
     //
     // Source libraries remain read-only regardless of the chosen folder.
@@ -192,6 +238,8 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
         scanState_ = indexComplete_ ? "Cancelled; retaining last complete index (Rescan to refresh)"
                                     : "Cancelled; no completed index (Rescan or reopen this tab)";
         preview_->setGeometry({});
+        publishFootprint({}, {});
+        footprint_->clear("No footprint loaded: select a footprint source.");
         setProperty("loadedSourceId", QString{});
         status_->setText(scanState_ + " · root: " + root_);
     });
@@ -231,6 +279,7 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
     root_ = QSettings().value("kicad/libraryRoot", installation).toString();
     status_->setText("Read-only KiCad Libraries · root: " + root_ + " · open this tab to index.");
 }
+
 /** Cancel asynchronous jobs at teardown.
  *
  * Worker closures contain copied inputs and cancellation flags, never widget
@@ -242,6 +291,7 @@ KiCadBrowser::~KiCadBrowser() {
     if (loadCancel_)
         loadCancel_->store(true);
 }
+
 /** Configure the root through the existing settings mechanism.
  *
  * Root changes invalidate selection work and clear geometry before a new index
@@ -262,8 +312,11 @@ void KiCadBrowser::configureRoot(const QString &root, bool persist) {
         loadCancel_->store(true);
     ++selectionGeneration_;
     preview_->setGeometry({});
+    publishFootprint({}, {});
+    footprint_->clear("No footprint loaded: select a footprint source.");
     scan();
 }
+
 /** Activate lazy source discovery.
  *
  * Reopening the tab reuses metadata until a root change or explicit rescan
@@ -273,6 +326,7 @@ void KiCadBrowser::activate() {
     if (!started_)
         scan();
 }
+
 /** Request a reproducible demonstration through visible controls.
  *
  * Qualified library and item names avoid collisions with symbols and generic
@@ -286,6 +340,7 @@ void KiCadBrowser::demonstrate(const QString &qualified) {
     if (!index_.entries.isEmpty())
         refresh();
 }
+
 /** Scan file metadata outside the UI thread.
  *
  * Cancelled scans retain the previously completed index and late results cannot
@@ -308,6 +363,8 @@ void KiCadBrowser::scan() {
     if (loadCancel_)
         loadCancel_->store(true);
     preview_->setGeometry({});
+    publishFootprint({}, {});
+    footprint_->clear("No footprint loaded: select a footprint source.");
     setProperty("loadedSourceId", QString{});
     auto watcher = new QFutureWatcher<KiCadIndex>(this);
     // Publish only the current completed scan.
@@ -344,6 +401,7 @@ void KiCadBrowser::scan() {
     watcher->setFuture(
         QtConcurrent::run([root, cancel, additional] { return scanKiCad(root, cancel, additional); }));
 }
+
 /** Filter qualified indexed source names.
  *
  * Filter changes return to the first page so old offsets cannot hide new matches.
@@ -352,6 +410,7 @@ void KiCadBrowser::refresh() {
     page_ = 0;
     populatePage();
 }
+
 /** Populate a bounded page from all matching indexed filenames.
  *
  * The displayed range, total and active filters make excluded matches visible
@@ -422,6 +481,7 @@ void KiCadBrowser::populatePage() {
     list_->setCurrentRow(row);
     inspect();
 }
+
 /** Load a selected source with stale-result protection.
  *
  * Previous geometry clears immediately, and only the current selection may
@@ -435,8 +495,12 @@ void KiCadBrowser::inspect() {
     auto cancel = loadCancel_;
     auto generation = ++selectionGeneration_;
     preview_->setGeometry({});
-    padInfo_->setText("Click a numbered marker to inspect its footprint coordinates.");
+    publishFootprint({}, {});
+    footprint_->clear("No footprint loaded: select a footprint source.");
+    footprint_->clear("Loading footprint geometry…");
+    padInfo_->setText("Click a pad in either preview to inspect its record.");
     if (!list_->currentItem()) {
+        footprint_->clear("No matching footprint source.");
         detail_->setHtml("<p>No matching source.</p>");
         return;
     }
@@ -500,8 +564,18 @@ void KiCadBrowser::inspect() {
                                                 safe(index_.licenses.join("\n")) + "</p>";
         if (!r.geometry.error.isEmpty())
             html += "<p><b>" + safe(r.geometry.error) + "</b></p>";
+        html += "<h3>2D footprint diagnostics</h3>";
+        for (const auto &d : r.drawing.diagnostics)
+            html += "<p>" + safe(d) + "</p>";
         detail_->setHtml(html);
         preview_->setGeometry(r.geometry);
+        if (r.entry.kind == "footprint" && !r.footprint.name.isEmpty())
+            publishFootprint(r.footprint, r.drawing);
+        else
+            footprint_->clear(r.entry.kind == "footprint"
+                                  ? r.geometry.error
+                                  : "No footprint association: direct model and symbol-library selections "
+                                    "contain no physical pad geometry.");
         setProperty("loadedSourceId", r.entry.id());
     });
     // Parse metadata and geometry entirely outside presentation code.
@@ -511,13 +585,79 @@ void KiCadBrowser::inspect() {
         Selection r;
         r.entry = entry;
         try {
-            if (entry.kind == "footprint")
+            if (entry.kind == "footprint") {
                 r.footprint = loadFootprint(entry.path);
-            r.geometry = loadKiCadGeometry(root, entry, cancel);
+                r.drawing = footprintDrawing(r.footprint);
+                r.geometry = loadFootprintModels(root, r.footprint, cancel);
+            } else
+                r.geometry = loadKiCadGeometry(root, entry, cancel);
         } catch (const std::exception &e) {
             r.geometry.error = QString::fromUtf8(e.what());
         }
         return r;
     }));
+}
+
+/** Publish prepared geometry independently of model availability.
+ *
+ * The legend exposes actual named layers with distinct front/back colors.
+ */
+void KiCadBrowser::publishFootprint(const KiCadFootprint &f, const FootprintDrawing &d) {
+    footprint_->setFootprint(f, d);
+    auto layout = static_cast<QGridLayout *>(layerControls_->layout());
+    while (auto item = layout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    for (int i = 0; i < d.layers.size(); ++i) {
+        auto layer = d.layers[i];
+        auto box = new QCheckBox(layer, layerControls_);
+        box->setObjectName("footprintLayer_" + layer);
+        box->setChecked(footprint_->layerVisible(layer));
+        box->setStyleSheet("QCheckBox { color: " +
+                           (layer == "Drills" ? QString("#c1d0dc") : footprintLayerColor(layer).name()) +
+                           "; background: #202d38; }");
+        layout->addWidget(box, i / 3, i % 3);
+        // Apply only this named layer filter.
+        //
+        // Source paths and the independent 3D view remain unchanged.
+        connect(box, &QCheckBox::toggled, footprint_,
+                [this, layer](bool visible) { footprint_->setLayerVisible(layer, visible); });
+    }
+    bool partial = std::any_of(d.diagnostics.begin(), d.diagnostics.end(),
+                               [](const auto &v) { return v.startsWith("Incomplete"); });
+    footprintDiagnostics_->setText(partial ? "Incomplete geometry — see diagnostics in details."
+                                           : (d.diagnostics.isEmpty()
+                                                  ? "Actual footprint geometry · millimetres"
+                                                  : "Qt text/font approximation · see details."));
+    footprintDiagnostics_->setToolTip(d.diagnostics.join("\n"));
+}
+
+/** Synchronize one source record and show its physical metadata.
+ *
+ * Index identity keeps repeated and unnumbered pads separately selectable.
+ */
+void KiCadBrowser::selectPad(int index) {
+    if (index < 0 || index >= preview_->pads().size())
+        return;
+    footprint_->selectPad(index);
+    preview_->selectPad(index);
+    const auto &p = preview_->pads()[index];
+    padInfo_->setText(QString("Record %1 · Pad %2 · %3 / %4 · Layers: %5 · Position (%6, %7) mm · Size %8 × "
+                              "%9 mm · Rotation %10° · Drill: %11")
+                          .arg(index)
+                          .arg(p.number.isEmpty() ? "(unnumbered mechanical)" : p.number, p.type, p.shape,
+                               p.layers.join(", "))
+                          .arg(p.position.x())
+                          .arg(p.position.y())
+                          .arg(p.size.x())
+                          .arg(p.size.y())
+                          .arg(p.rotation)
+                          .arg(p.hasDrill ? QString("%1 × %2 mm; offset (%3, %4)")
+                                                .arg(p.drillSize.x())
+                                                .arg(p.drillSize.y())
+                                                .arg(p.drillOffset.x())
+                                                .arg(p.drillOffset.y())
+                                          : "none specified"));
 }
 } // namespace hvd

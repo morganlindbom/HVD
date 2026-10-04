@@ -225,8 +225,9 @@ Markers are connection centres drawn over the mesh, not exact copper outlines or
 `parseFootprint` uses a recursive S-expression parser with quoted-string escapes, nested expressions,
 finite-number validation, and nesting/size bounds. `KiCadPad` records are independent from component
 pins: repeated numbers and unnumbered mechanical pads remain separate array entries. Positions,
-rotation and dimensions are retained. Complex custom/trapezoid outlines are diagnosed; only connection
-markers are rendered. Footprint graphics and symbol pin parsing/mapping are outside this milestone.
+rotation, dimensions, layers and drills are retained. Dedicated footprint geometry is described below.
+Complex custom/trapezoid outlines are visibly diagnosed as incomplete; only their origins and supported
+drills are shown. Symbol pin parsing/mapping remains outside this milestone.
 
 `scanKiCad` returns separate `footprint:library:item`, `symbol-library:library:item`, and
 `model:library:filename` identities. `resolveKiCadModel` maps `${KICAD9_3DMODEL_DIR}` to the
@@ -260,7 +261,7 @@ instances, and own resource assignments itself. Physical pad numbers do not esta
 
 ## Repository scope and local dependencies
 
-The private `morganlindbom/HVD` repository currently contains the standalone HVD Component
+The `morganlindbom/HVD` repository currently contains the standalone HVD Component
 Manager, including the synthetic board preview and read-only KiCad/VRML integration. It is
 intended for later HVD integration; it does not contain the separate HVD/PVD application.
 
@@ -309,3 +310,60 @@ reports index completion/cancellation, retained prior indexes, per-type counts a
 Press **Rescan** after changing local library files; there is no persistent metadata cache or file watcher.
 Cancelled first scans can restart when the source tab is reopened. STEP-only files are explicitly
 labelled and diagnosed as present but unsupported rather than falsely reported as missing.
+
+## Dedicated 2D footprint preview
+
+KiCad footprint selection displays **Footprint Preview ? 2D** and **Model Preview ? 3D**
+simultaneously in a horizontal resizable splitter. Both share one structurally parsed footprint
+and each pad's source-record index. Repeated numbers and unnumbered mechanical pads remain distinct;
+click coincident pads repeatedly to cycle records. `M<n>` labels identify unnumbered records for
+inspection and do not assign electrical numbers. Linked selection shows number, type, layers,
+position, rotation, dimensions and drill/offset. The two cameras operate independently.
+
+The CPU `hvd_kicad` library prepares `FootprintDrawing` paths without QWidget/OpenGL.
+Supported pads: rectangle, circle, oval/obround and roundrect with explicit corner ratio.
+Circular and oval/slotted drills retain local offsets and pad rotation. Supported artwork:
+lines, rectangles, circles, three-point arcs, XY polygons and reference/value/user text.
+Solid, dash, dot, dash-dot and dash-dot-dot strokes are supported. Text uses an explicitly
+reported Qt font approximation, not exact KiCad stroke glyphs; variables remain literal.
+Silkscreen, fabrication, courtyard and named copper layers have colours and visibility controls.
+Copper wildcards expand to front/back; mask/paste expansion and inner-board stackups are not
+reconstructed. Mechanical holes have a separate drill layer. Back layers are initially hidden.
+Custom/trapezoid/chamfered pads, legacy angle arcs, polygon curves, zones and embedded images
+are incomplete and diagnosed visibly, with no invented replacement outline. This is inspection,
+not a PCB editor, symbol mapper or compatibility certification.
+
+All 2D geometry uses KiCad's stored millimetres: **+X right, +Y down**, viewed from the front.
+Positive pad/text angles are counterclockwise; the painter applies the negative screen angle.
+Back layers share stored coordinates and are not implicitly mirrored. **Back view** explicitly
+mirrors X; layer visibility remains independent. In 3D the same pad maps to `(x,-y,0)` with +Z up.
+Asymmetric fixtures verify signs, rotation, slotted-drill offsets and back-view mirroring.
+Fit uses visible paths including stroke widths and supported text, so long value text can make copper small;
+use wheel zoom to inspect it. Footprints still display when models are absent or unsupported.
+Direct model/symbol-library selection explains the missing footprint association and clears it.
+
+Controls: wheel zoom about the pointer; middle/right drag pan; **Fit**/**Reset** restore framing;
+**Grid**, origin axes and adaptive millimetre scale provide measurement context. Layer checkboxes
+serve as the legend. Click a pad in either view to synchronize its record highlight. Selection/root
+changes and cancellation clear old paths, layer controls and model data; asynchronous generation
+checks reject stale results. Parsing and geometry preparation run outside the GUI thread.
+
+The `footprint-tests` suite covers primitives, actual bounds, asymmetric orientation, rotated pads
+and drills, repeated/coincident records, layer pixels/visibility, camera navigation, resizing,
+missing/malformed sources, missing models, direct model clearing and linked 2D/3D input.
+Existing catalogue/package, KiCad, UI and 3D regression suites remain in CTest.
+
+For this checkout's copied KiCad installation, the actual data root is
+`kicad/9.0/share/kicad`, containing `footprints`, `symbols` and `3dmodels`. Configure that directory
+rather than the outer `kicad` directory. For example:
+
+```powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=C:/msys64/ucrt64 -DHVD_KICAD_DEVELOPMENT_ROOT="$((Resolve-Path ./kicad/9.0/share/kicad).Path.Replace('\','/'))"
+cmake --build build --parallel 4
+ctest --test-dir build --output-on-failure
+./build/hvd_component_manager.exe --kicad-root ./kicad/9.0/share/kicad --kicad-select Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal --screenshot ./artifacts/footprint-preview.png
+```
+
+Source format reference: [KiCad S-expression PCB/footprint format](https://dev-docs.kicad.org/en/file-formats/sexpr-pcb/).
+Copied libraries and licenses remain local and read-only. STEP remains unsupported; supported
+VRML companions are explicitly reported. No new dependency or package-containment exception is added.
