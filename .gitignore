@@ -1,0 +1,64 @@
+# .gitignore
+# BEGIN ARAMF MANAGED IGNORE
+# ARAMF private/generated project artifacts
+/ARAMF_WORKER/
+/ARAMF_WORKER_*/
+/ARAMF/
+/aramf/
+/AGENTS.md
+# END ARAMF MANAGED IGNORE
+
+# Local external libraries: preserve on disk, never stage.
+/kicad/
+
+# Local ARAMF configuration and downloaded reference snapshots.
+/*.aramf.json
+/reference-material/
+
+# Generated screenshots and runtime/test output.
+/artifacts/
+/Testing/
+*.log
+*.tmp
+*.temp
+
+# Build products and CMake state.
+/build*/
+/cmake-build*/
+/out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+build.ninja
+.ninja_deps
+.ninja_log
+*_autogen/
+*.exe
+*.dll
+*.obj
+*.o
+*.a
+*.lib
+*.pdb
+
+# Machine-specific IDE/configuration and caches.
+/.vs/
+/.vscode/
+/.idea/
+CMakeUserPresets.json
+*.user
+*.user.*
+__pycache__/
+*.pyc
+.cache/
+
+# Credentials and private key material.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json

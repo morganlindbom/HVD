@@ -1,0 +1,23 @@
+{
+    "schemaVersion": 1,
+    "id": "example.synthetic-sensor",
+    "revision": 1,
+    "name": "Demonstration digital sensor",
+    "manufacturer": null,
+    "partNumber": null,
+    "description": "Synthetic example for catalogue workflows. This is not a real manufacturer component. Electrical specifications are unknown. The missing datasheet reference demonstrates safe asset diagnostics.",
+    "category": "Examples / Sensors",
+    "kind": "sensor",
+    "tags": ["example", "synthetic", "digital"],
+    "pins": [
+        {"id": "supply", "name": "Supply", "physicalNumber": "1", "gpioIdentifier": null, "logicalSignal": "VCC", "capabilities": ["power"]},
+        {"id": "signal", "name": "Signal", "physicalNumber": "2", "gpioIdentifier": null, "logicalSignal": "OUT", "capabilities": ["digital-output"]},
+        {"id": "ground", "name": "Ground", "physicalNumber": "3", "gpioIdentifier": null, "logicalSignal": "GND", "capabilities": ["ground"]}
+    ],
+    "electricalLimits": [{"name": "Supply voltage", "unit": "V", "minimum": null, "maximum": null}],
+    "properties": [{"id": "enabled", "name": "Enabled", "type": "boolean", "default": true, "constraints": {}}],
+    "assets": {"datasheet": "assets/unavailable-example.txt", "image": null},
+    "sources": [],
+    "verificationStatus": "demonstration",
+    "extensions": {}
+}

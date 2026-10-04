@@ -1,0 +1,22 @@
+{
+    "schemaVersion": 1,
+    "id": "example.synthetic-carrier",
+    "revision": 1,
+    "name": "Demonstration carrier board",
+    "manufacturer": null,
+    "partNumber": null,
+    "description": "Synthetic carrier-board example, not ROBO-PICO and not a Pico board. Any installed microcontroller board is a separate component definition. No electrical compatibility is asserted.",
+    "category": "Examples / Boards",
+    "kind": "board",
+    "tags": ["example", "synthetic", "carrier"],
+    "pins": [
+        {"id": "header-signal", "name": "Header signal", "physicalNumber": "J1.1", "gpioIdentifier": null, "logicalSignal": "SIGNAL_A", "capabilities": ["digital-input", "digital-output"]},
+        {"id": "header-ground", "name": "Header ground", "physicalNumber": "J1.2", "gpioIdentifier": null, "logicalSignal": "GND", "capabilities": ["ground"]}
+    ],
+    "electricalLimits": [],
+    "properties": [{"id": "label", "name": "Display label", "type": "string", "default": "Example carrier", "constraints": {}}],
+    "assets": {},
+    "sources": [],
+    "verificationStatus": "demonstration",
+    "extensions": {"installedBoard": null}
+}

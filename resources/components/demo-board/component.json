@@ -1,0 +1,26 @@
+{
+    "schemaVersion": 1,
+    "id": "example.synthetic-demo-board",
+    "revision": 1,
+    "name": "Demo Board — synthetic model",
+    "manufacturer": null,
+    "partNumber": null,
+    "description": "Procedural visual demonstration only. A green 50 x 24 x 1.6 mm PCB, four labelled mounting-hole markers, two rows of 16 metallic header pins, a dark chip, an end connector and a yellow pin-1 triangle. These dimensions are synthetic visual design choices, not Pico or ROBO-PICO measurements or electrical specifications.",
+    "category": "Examples / 3D Models",
+    "kind": "board",
+    "tags": ["example", "synthetic", "3d", "procedural"],
+    "pins": [],
+    "electricalLimits": [],
+    "properties": [],
+    "assets": {},
+    "sources": [],
+    "verificationStatus": "demonstration",
+    "extensions": {
+        "model": {
+            "schemaVersion": 1,
+            "type": "procedural",
+            "generator": "demo-board-v1",
+            "units": "mm"
+        }
+    }
+}
