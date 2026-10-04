@@ -65,9 +65,10 @@ KiCadFootprint loadFootprint(const QString &path);
 /** Discover source metadata without reading model geometry.
  *
  * Enumeration checks cancellation and does not write, copy or register
- * manufacturer components.
+ * manufacturer components. Additional folders and loose example files are
+ * included only when explicitly requested.
  */
-KiCadIndex scanKiCad(const QString &root, const Cancellation &cancel);
+KiCadIndex scanKiCad(const QString &root, const Cancellation &cancel, bool includeAdditional = false);
 /** Resolve an external model through the configured read-only library root.
  *
  * Only KICAD9_3DMODEL_DIR is mapped; unresolved variables and canonical path

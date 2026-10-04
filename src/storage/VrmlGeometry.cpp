@@ -351,10 +351,14 @@ QVector<ModelVertex> loadVrml(const QString &path, const QMatrix4x4 &placement, 
                        "crease-angle shading use preview lighting.");
     QStringList notice;
     for (const auto &line : text.split('\n')) {
-        if (!line.startsWith('#'))
+        const auto comment = line.trimmed();
+        if (comment.isEmpty())
+            continue;
+        if (!comment.startsWith('#'))
             break;
-        if (line.contains("license", Qt::CaseInsensitive) || line.contains("Copyright", Qt::CaseInsensitive))
-            notice.append(line.mid(1).trimmed());
+        if (comment.contains("license", Qt::CaseInsensitive) ||
+            comment.contains("Copyright", Qt::CaseInsensitive))
+            notice.append(comment.mid(1).trimmed());
     }
     diagnostics.append(notice.isEmpty() ? "No embedded license statement found in " + path
                                         : "Embedded source/license notice: " + notice.join(" "));

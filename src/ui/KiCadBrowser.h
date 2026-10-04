@@ -7,6 +7,8 @@ class QLineEdit;
 class QListWidget;
 class QTextBrowser;
 class QLabel;
+class QPushButton;
+class QCheckBox;
 namespace hvd {
 class ModelPreview;
 class KiCadBrowser : public QWidget {
@@ -50,10 +52,16 @@ class KiCadBrowser : public QWidget {
     void scan();
     /** Apply library, kind and text filters to indexed filenames.
      *
-     * Display is capped at 1000 matches to keep large source collections
-     * responsive.
+     * Reset pagination after filter changes, retaining a bounded visible page
+     * without hiding matches from navigation.
      */
     void refresh();
+    /** Display one page of the complete filtered index.
+     *
+     * Next/previous navigation reaches every match without reading model files
+     * during filtering or populating more than 1000 list rows.
+     */
+    void populatePage();
     /** Clear stale geometry and asynchronously load the selected source.
      *
      * A generation counter prevents old selections from publishing late meshes.
@@ -62,6 +70,9 @@ class KiCadBrowser : public QWidget {
     QString root_, desired_;
     KiCadIndex index_;
     bool started_ = false;
+    bool scanPending_ = false, indexComplete_ = false;
+    int page_ = 0;
+    QString scanState_ = "Not scanned";
     quint64 scanGeneration_ = 0, selectionGeneration_ = 0;
     Cancellation scanCancel_, loadCancel_;
     QComboBox *kind_, *library_;
@@ -69,6 +80,9 @@ class KiCadBrowser : public QWidget {
     QListWidget *list_;
     QTextBrowser *detail_;
     QLabel *status_, *padInfo_;
+    QLabel *pageInfo_;
+    QPushButton *previous_, *next_;
+    QCheckBox *additional_;
     ModelPreview *preview_;
 };
 } // namespace hvd

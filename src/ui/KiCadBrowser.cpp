@@ -49,6 +49,11 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
     roots->addWidget(choose);
     roots->addWidget(rescan);
     roots->addWidget(cancel);
+    additional_ = new QCheckBox("Include additional folders", this);
+    additional_->setObjectName("kiCadAdditionalFolders");
+    additional_->setToolTip(
+        "Also index demos, templates and loose footprint/model files under the selected root.");
+    roots->addWidget(additional_);
     roots->addStretch();
     layout->addLayout(roots);
     auto filters = new QHBoxLayout;
@@ -68,6 +73,23 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
     filters->addWidget(library_);
     filters->addWidget(search_, 2);
     layout->addLayout(filters);
+    auto formats =
+        new QLabel("Separate sources: footprint files, symbol-library files and 3D model files. "
+                   "Rendering: VRML97 subset; STEP is not parsed (an existing WRL companion may be used).",
+                   this);
+    formats->setWordWrap(true);
+    layout->addWidget(formats);
+    auto clear = new QPushButton("Clear library/search filters", this);
+    clear->setObjectName("kiCadClearFilters");
+    filters->addWidget(clear);
+    // Reset only the narrowing filters, retaining the selected source type.
+    //
+    // An empty search still has complete pagination in that source type.
+    connect(clear, &QPushButton::clicked, this, [this] {
+        library_->setCurrentIndex(0);
+        search_->clear();
+        refresh();
+    });
     auto split = new QSplitter(this);
     list_ = new QListWidget(split);
     list_->setObjectName("kiCadItems");
@@ -100,6 +122,30 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
     split->setSizes({280, 390, 620});
     split->setStretchFactor(2, 3);
     layout->addWidget(split, 1);
+    auto pages = new QHBoxLayout;
+    previous_ = new QPushButton("Previous page", this);
+    previous_->setObjectName("kiCadPreviousPage");
+    next_ = new QPushButton("Next page", this);
+    next_->setObjectName("kiCadNextPage");
+    pageInfo_ = new QLabel("No results", this);
+    pageInfo_->setObjectName("kiCadPageInfo");
+    pages->addWidget(previous_);
+    pages->addWidget(pageInfo_, 1);
+    pages->addWidget(next_);
+    layout->addLayout(pages);
+    previous_->setEnabled(false);
+    next_->setEnabled(false);
+    // Navigate a bounded page without changing filters or the metadata index.
+    //
+    // Each page can be reached even when many items have identical search terms.
+    connect(previous_, &QPushButton::clicked, this, [this] {
+        --page_;
+        populatePage();
+    });
+    connect(next_, &QPushButton::clicked, this, [this] {
+        ++page_;
+        populatePage();
+    });
     status_ = new QLabel(this);
     status_->setObjectName("kiCadStatus");
     status_->setWordWrap(true);
@@ -141,8 +187,13 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
             loadCancel_->store(true);
         ++scanGeneration_;
         ++selectionGeneration_;
+        scanPending_ = false;
+        started_ = indexComplete_;
+        scanState_ = indexComplete_ ? "Cancelled; retaining last complete index (Rescan to refresh)"
+                                    : "Cancelled; no completed index (Rescan or reopen this tab)";
         preview_->setGeometry({});
-        status_->setText("Cancelled. Rescan or select an item to continue.");
+        setProperty("loadedSourceId", QString{});
+        status_->setText(scanState_ + " · root: " + root_);
     });
     // Repopulate library choices for the distinct source kind.
     //
@@ -171,6 +222,7 @@ KiCadBrowser::KiCadBrowser(QWidget *parent) : QWidget(parent) {
     connect(search_, &QLineEdit::textChanged, debounce, [debounce] { debounce->start(); });
     connect(debounce, &QTimer::timeout, this, &KiCadBrowser::refresh);
     connect(list_, &QListWidget::currentRowChanged, this, &KiCadBrowser::inspect);
+    connect(additional_, &QCheckBox::toggled, this, &KiCadBrowser::scan);
     QString installation = QDir(QCoreApplication::applicationDirPath()).filePath("kicad");
 #ifdef HVD_KICAD_DEVELOPMENT_ROOT
     if (!QDir(installation).exists())
@@ -200,7 +252,12 @@ void KiCadBrowser::configureRoot(const QString &root, bool persist) {
     if (persist)
         QSettings().setValue("kicad/libraryRoot", root_);
     index_ = {};
+    indexComplete_ = false;
+    page_ = 0;
     list_->clear();
+    library_->setCurrentIndex(0);
+    detail_->clear();
+    setProperty("loadedSourceId", QString{});
     if (loadCancel_)
         loadCancel_->store(true);
     ++selectionGeneration_;
@@ -236,13 +293,22 @@ void KiCadBrowser::demonstrate(const QString &qualified) {
  */
 void KiCadBrowser::scan() {
     started_ = true;
+    scanPending_ = true;
     if (scanCancel_)
         scanCancel_->store(true);
     scanCancel_ = std::make_shared<std::atomic_bool>(false);
     const auto cancel = scanCancel_;
     const auto generation = ++scanGeneration_;
     const auto root = root_;
-    status_->setText("Indexing read-only libraries… " + root);
+    const bool additional = additional_->isChecked();
+    scanState_ = indexComplete_ ? "Scanning; displaying last complete index until completion"
+                                : "Scanning; no completed index yet";
+    status_->setText(scanState_ + " · " + root);
+    ++selectionGeneration_;
+    if (loadCancel_)
+        loadCancel_->store(true);
+    preview_->setGeometry({});
+    setProperty("loadedSourceId", QString{});
     auto watcher = new QFutureWatcher<KiCadIndex>(this);
     // Publish only the current completed scan.
     //
@@ -254,6 +320,9 @@ void KiCadBrowser::scan() {
         if (generation != scanGeneration_ || result.cancelled)
             return;
         index_ = std::move(result);
+        scanPending_ = false;
+        indexComplete_ = true;
+        scanState_ = "Complete metadata index (Rescan after changing files)";
         QStringList names;
         for (const auto &e : index_.entries)
             if (e.kind == kind_->currentData())
@@ -272,39 +341,75 @@ void KiCadBrowser::scan() {
     // Capture immutable worker inputs.
     //
     // No OpenGL or QWidget API is called during filesystem enumeration.
-    watcher->setFuture(QtConcurrent::run([root, cancel] { return scanKiCad(root, cancel); }));
+    watcher->setFuture(
+        QtConcurrent::run([root, cancel, additional] { return scanKiCad(root, cancel, additional); }));
 }
 /** Filter qualified indexed source names.
  *
- * The result cap keeps enumeration responsive while search and library filters
- * reach every indexed item.
+ * Filter changes return to the first page so old offsets cannot hide new matches.
  */
 void KiCadBrowser::refresh() {
+    page_ = 0;
+    populatePage();
+}
+/** Populate a bounded page from all matching indexed filenames.
+ *
+ * The displayed range, total and active filters make excluded matches visible
+ * without parsing any model to populate the list.
+ */
+void KiCadBrowser::populatePage() {
     QString selected =
         list_->currentItem() ? list_->currentItem()->data(Qt::UserRole + 1).toString() : QString{};
     QSignalBlocker block(list_);
     list_->clear();
     int matches = 0;
+    int footprints = 0, symbols = 0, vrml = 0, step = 0;
     QString query = search_->text().trimmed();
     for (int i = 0; i < index_.entries.size(); ++i) {
         const auto &e = index_.entries[i];
+        footprints += e.kind == "footprint";
+        symbols += e.kind == "symbol-library";
+        vrml += e.kind == "model" && e.name.endsWith(".wrl", Qt::CaseInsensitive);
+        step += e.kind == "model" && e.name.endsWith(".step", Qt::CaseInsensitive);
         if (e.kind != kind_->currentData() ||
             (!library_->currentData().toString().isEmpty() && e.library != library_->currentData()) ||
-            !(e.library + ":" + e.name).contains(query, Qt::CaseInsensitive))
+            !e.id().contains(query, Qt::CaseInsensitive))
             continue;
         ++matches;
-        if (list_->count() < 1000) {
-            auto item = new QListWidgetItem(e.library + ":" + e.name, list_);
+        if (matches > page_ * 1000 && list_->count() < 1000) {
+            QString label = e.library + ":" + e.name;
+            if (e.kind == "model" && e.name.endsWith(".step", Qt::CaseInsensitive))
+                label += " [STEP not parsed]";
+            auto item = new QListWidgetItem(label, list_);
             item->setData(Qt::UserRole, i);
             item->setData(Qt::UserRole + 1, e.id());
             item->setToolTip(e.path);
         }
     }
-    status_->setText(QString("%1 matches · showing %2 · %3 indexed sources · root: %4\n%5")
+    int pages = (matches + 999) / 1000;
+    previous_->setEnabled(page_ > 0);
+    next_->setEnabled(page_ + 1 < pages);
+    pageInfo_->setText(
+        QString("Page %1 of %2 · showing %3–%4 of %5 matches · 1,000 results per page; all matches reachable")
+            .arg(matches ? page_ + 1 : 0)
+            .arg(pages)
+            .arg(matches ? page_ * 1000 + 1 : 0)
+            .arg(page_ * 1000 + list_->count())
+            .arg(matches));
+    status_->setText(QString("%1 matches · showing %2 · %3 indexed sources · root: %4\n%5\n%6 · Type: %7 · "
+                             "Library: %8 · Search: %9")
                          .arg(matches)
                          .arg(list_->count())
                          .arg(index_.entries.size())
-                         .arg(root_, index_.diagnostics.join("\n")));
+                         .arg(root_, index_.diagnostics.join("\n"))
+                         .arg(scanState_, kind_->currentText(), library_->currentText(),
+                              query.isEmpty() ? "(none)" : query));
+    status_->setText(status_->text() +
+                     QString("\nIndex: %1 footprints · %2 symbol libraries · %3 VRML · %4 STEP (not parsed)")
+                         .arg(footprints)
+                         .arg(symbols)
+                         .arg(vrml)
+                         .arg(step));
     int row = list_->count() ? 0 : -1;
     for (int i = 0; i < list_->count(); ++i) {
         auto item = list_->item(i);

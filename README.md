@@ -201,13 +201,15 @@ Discovery in this checkout found `kicad/footprints` (15,086 `.kicad_mod` files i
 libraries), `kicad/symbols` (225 `.kicad_sym` libraries), and `kicad/3dmodels` (6,839 `.wrl`
 and 6,936 `.step` files inside `.3dshapes` libraries). Counts describe this copied tree, not a
 required installation. Default scanning uses these source folders and excludes unrelated demos.
+Enable **Include additional folders** to also index demo/template and loose files; default scanning
+retains the three main library roots. Main source identifiers remain stable in either scan mode.
 Nested library paths qualify identities to avoid same-name collisions. Standalone license files were found only under unrelated demos; the
 selected resistor VRML has an embedded copyright and CC-BY-SA 4.0 notice with an exception.
 The source and all notices remain unchanged. Review each asset's license before redistribution.
 
 Select Footprints, choose a library or search its qualified `library:item` name. Metadata scanning
-runs in Qt Concurrent with cancellation. Search shows at most 1000 matches; refine it to reach any
-indexed item. Meshes are parsed only on selection, outside the GUI thread; generation checks discard
+runs in Qt Concurrent with cancellation. The list shows 1000 matches per page with Previous/Next controls, a range/total indicator, and
+explicit active filters. All indexed items are reachable through pagination or qualified-ID search. Meshes are parsed only on selection, outside the GUI thread; generation checks discard
 superseded scans and model results. GPU upload occurs only in QOpenGLWidget's current context.
 
 To demonstrate the actual copied model, search:
@@ -299,3 +301,11 @@ records are deleted or rewritten to prepare this repository. There is currently 
 requiring a generated screenshot or evidence file to be committed. Build products, personal
 IDE settings and credentials are excluded. Application source, tests, bundled demonstration
 definitions and this reproducibility documentation are tracked.
+
+
+The [local KiCad availability audit](docs/KICAD_LIBRARY_AUDIT.md) distinguishes discovery, filters,
+missing associations, absent files, STEP-only files and unsupported VRML features. The browser now
+reports index completion/cancellation, retained prior indexes, per-type counts and scan scope.
+Press **Rescan** after changing local library files; there is no persistent metadata cache or file watcher.
+Cancelled first scans can restart when the source tab is reopened. STEP-only files are explicitly
+labelled and diagnosed as present but unsupported rather than falsely reported as missing.

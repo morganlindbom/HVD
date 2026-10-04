@@ -9,6 +9,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -150,10 +151,13 @@ class KiCadTests : public QObject {
     void vrml() {
         QTemporaryDir temp;
         auto path = temp.filePath("scene.wrl");
-        write(path, triangle());
+        write(path, triangle().replace("#VRML V2.0 utf8\n",
+                                       "#VRML V2.0 utf8\n\n  # Copyright fixture\n# License fixture\n\n"));
         QStringList diagnostics;
         auto cancel = std::make_shared<std::atomic_bool>(false);
         auto v = hvd::loadVrml(path, hvd::kiCadPlacement({}), diagnostics, cancel);
+        QVERIFY(diagnostics.join(" ").contains("Copyright fixture"));
+        QVERIFY(diagnostics.join(" ").contains("License fixture"));
         QCOMPARE(v.size(), 3);
         QVERIFY(std::abs(v[0].x - 2.54f) < .0001f);
         QVERIFY(std::abs(v[1].x - 5.08f) < .0001f);
@@ -263,7 +267,7 @@ class KiCadTests : public QObject {
         search->setText("Empty");
         QTRY_COMPARE(list->count(), 1);
         QTRY_VERIFY_WITH_TIMEOUT(
-            !preview->hasModel() && preview->statusText().contains("No visible supported"), 10000);
+            !preview->hasModel() && preview->statusText().contains("No associated model"), 10000);
         QTest::qWait(100);
         QVERIFY(!preview->hasModel());
         search->setText("Visible");
@@ -276,6 +280,89 @@ class KiCadTests : public QObject {
             b.configureRoot(temp.path());
             b.close();
         }
+    }
+    /** Reach every indexed match through pagination and explicit source filters.
+     *
+     * A collection larger than one page verifies list reachability, search reset,
+     * direct model browsing, optional additional files and restart after cancellation.
+     */
+    void paginationAndSources() {
+        QTemporaryDir temp;
+        for (int i = 0; i < 1005; ++i)
+            write(temp.filePath(QString("footprints/Test.pretty/Part%1.kicad_mod").arg(i, 4, 10, QChar('0'))),
+                  "(footprint \"test\")");
+        write(temp.filePath("demos/loose.kicad_mod"), "(footprint \"example\")");
+        auto model = temp.filePath("3dmodels/Test.3dshapes/direct.wrl");
+        write(model, triangle());
+        auto step = temp.filePath("3dmodels/Test.3dshapes/only.step");
+        write(step, "ISO-10303-21;\nEND-ISO-10303-21;");
+        write(temp.filePath("symbols/Test.kicad_sym"), "(kicad_symbol_lib)");
+        auto cancel = std::make_shared<std::atomic_bool>(false);
+        auto main = hvd::scanKiCad(temp.path(), cancel);
+        auto all = hvd::scanKiCad(temp.path(), cancel, true);
+        QCOMPARE(main.entries.size(), 1008);
+        QCOMPARE(all.entries.size(), 1009);
+        QSet<QString> ids;
+        for (const auto &entry : all.entries)
+            ids.insert(entry.id());
+        for (const auto &entry : main.entries)
+            QVERIFY(ids.contains(entry.id()));
+        auto geometry = hvd::loadKiCadGeometry(temp.path(), {"model", "Test", "only.step", step}, cancel);
+        QVERIFY(geometry.vertices.isEmpty());
+        QVERIFY(geometry.error.contains("STEP model is present but cannot be rendered"));
+
+        hvd::KiCadBrowser browser;
+        browser.resize(1200, 760);
+        browser.show();
+        browser.configureRoot(temp.path());
+        auto list = browser.findChild<QListWidget *>("kiCadItems");
+        auto search = browser.findChild<QLineEdit *>("kiCadSearch");
+        auto next = browser.findChild<QPushButton *>("kiCadNextPage");
+        auto previous = browser.findChild<QPushButton *>("kiCadPreviousPage");
+        auto page = browser.findChild<QLabel *>("kiCadPageInfo");
+        auto kind = browser.findChild<QComboBox *>("kiCadSourceKind");
+        auto preview = browser.findChild<hvd::ModelPreview *>("kiCadPreview");
+        QTRY_COMPARE_WITH_TIMEOUT(list->count(), 1000, 10000);
+        QVERIFY(page->text().contains("of 1005 matches"));
+        QSet<QString> reachable;
+        for (int i = 0; i < list->count(); ++i)
+            reachable.insert(list->item(i)->data(Qt::UserRole + 1).toString());
+        QTest::mouseClick(next, Qt::LeftButton);
+        QCOMPARE(list->count(), 5);
+        QVERIFY(!next->isEnabled());
+        QVERIFY(previous->isEnabled());
+        for (int i = 0; i < list->count(); ++i)
+            reachable.insert(list->item(i)->data(Qt::UserRole + 1).toString());
+        QCOMPARE(reachable.size(), 1005);
+        search->setText("footprint:Test:Part1004");
+        QTRY_COMPARE(list->count(), 1);
+        QVERIFY(!previous->isEnabled());
+        search->clear();
+        kind->setCurrentIndex(2);
+        QTRY_COMPARE(list->count(), 2);
+        QTRY_VERIFY(preview->hasModel());
+        list->setCurrentRow(1);
+        QTRY_VERIFY(preview->statusText().contains("STEP model is present"));
+        QVERIFY(!preview->hasModel());
+        kind->setCurrentIndex(1);
+        QTRY_COMPARE(list->count(), 1);
+        QTRY_VERIFY(preview->statusText().contains("Symbol parsing"));
+        auto additional = browser.findChild<QCheckBox *>("kiCadAdditionalFolders");
+        additional->setChecked(true);
+        search->setText("loose");
+        kind->setCurrentIndex(0);
+        QTRY_COMPARE_WITH_TIMEOUT(list->count(), 1, 10000);
+        QVERIFY(list->item(0)->text().contains("demos:loose"));
+
+        hvd::KiCadBrowser firstScan;
+        firstScan.configureRoot(temp.path());
+        auto buttons = firstScan.findChildren<QPushButton *>();
+        for (auto button : buttons)
+            if (button->text() == "Cancel loading / scan")
+                button->click();
+        QVERIFY(firstScan.findChild<QLabel *>("kiCadStatus")->text().contains("no completed index"));
+        firstScan.activate();
+        QTRY_COMPARE_WITH_TIMEOUT(firstScan.findChild<QListWidget *>("kiCadItems")->count(), 1000, 10000);
     }
 };
 QTEST_MAIN(KiCadTests)

@@ -254,7 +254,7 @@ KiCadFootprint loadFootprint(const QString &path) { return parseFootprint(readTe
  * Only filenames and directory metadata are read; 3D meshes are loaded on
  * selection.
  */
-KiCadIndex scanKiCad(const QString &root, const Cancellation &cancel) {
+KiCadIndex scanKiCad(const QString &root, const Cancellation &cancel, bool includeAdditional) {
     KiCadIndex result;
     QDir dir(root);
     if (!dir.exists()) {
@@ -275,8 +275,13 @@ KiCadIndex scanKiCad(const QString &root, const Cancellation &cancel) {
         else
             result.diagnostics.append("Optional source folder unavailable: " + name);
     }
-    if (scanRoots.isEmpty())
+    if (includeAdditional)
+        scanRoots = {root};
+    else if (scanRoots.isEmpty())
         scanRoots.append(root);
+    else
+        result.diagnostics.append("Scan scope: main footprints/symbols/3dmodels folders only. Enable "
+                                  "Include additional folders to browse demos, templates and loose files.");
     for (const auto &source : scanRoots) {
         QDirIterator it(source, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
         while (it.hasNext()) {
@@ -291,14 +296,24 @@ KiCadIndex scanKiCad(const QString &root, const Cancellation &cancel) {
             auto library = QDir(source).relativeFilePath(info.absolutePath());
             if (library == ".")
                 library = parent;
-            if (ext == "kicad_mod" && parent.endsWith(".pretty"))
-                result.entries.append({"footprint", library.chopped(7), info.completeBaseName(), path});
+            if (includeAdditional)
+                for (const auto &prefix : QStringList{"footprints/", "symbols/", "3dmodels/"})
+                    if (library.startsWith(prefix)) {
+                        library.remove(0, prefix.size());
+                        break;
+                    }
+            if (ext == "kicad_mod" && (includeAdditional || parent.endsWith(".pretty")))
+                result.entries.append({"footprint", parent.endsWith(".pretty") ? library.chopped(7) : library,
+                                       info.completeBaseName(), path});
             else if (ext == "kicad_sym") {
                 auto identity = QDir(source).relativeFilePath(path);
+                if (includeAdditional && identity.startsWith("symbols/"))
+                    identity.remove(0, 8);
                 identity.chop(10);
                 result.entries.append({"symbol-library", identity, info.completeBaseName(), path});
-            } else if ((ext == "wrl" || ext == "step") && parent.endsWith(".3dshapes"))
-                result.entries.append({"model", library.chopped(9), info.fileName(), path});
+            } else if ((ext == "wrl" || ext == "step") && (includeAdditional || parent.endsWith(".3dshapes")))
+                result.entries.append({"model", parent.endsWith(".3dshapes") ? library.chopped(9) : library,
+                                       info.fileName(), path});
             else if (info.fileName().contains("license", Qt::CaseInsensitive) ||
                      info.fileName().startsWith("COPYING", Qt::CaseInsensitive))
                 result.licenses.append(path);
@@ -388,7 +403,17 @@ ImportedGeometry loadKiCadGeometry(const QString &root, const KiCadEntry &entry,
                 QString companion = m.reference.left(m.reference.size() - 5) + ".wrl";
                 result.diagnostics.append("STEP is not parsed. Looking for VRML companion for " +
                                           m.reference);
-                path = resolveKiCadModel(root, companion, entry.path);
+                try {
+                    path = resolveKiCadModel(root, companion, entry.path);
+                } catch (const std::exception &) {
+                    // Resolve the original source before diagnosing format support.
+                    //
+                    // A present STEP file is different from a missing model reference.
+                    const auto original = resolveKiCadModel(root, m.reference, entry.path);
+                    fail("STEP model is present but cannot be rendered: " + original +
+                         ". STEP parsing is unsupported and no existing same-name WRL companion is "
+                         "available.");
+                }
                 result.diagnostics.append("Using existing VRML companion: " + path);
             } else
                 path = resolveKiCadModel(root, m.reference, entry.path);
@@ -398,7 +423,10 @@ ImportedGeometry loadKiCadGeometry(const QString &root, const KiCadEntry &entry,
             result.modelPaths.append(path);
         }
         if (result.vertices.isEmpty())
-            result.error = "No visible supported model is available for this source.";
+            result.error =
+                models.isEmpty()
+                    ? "No associated model: this footprint has no model references."
+                    : "No visible supported model is available for this source (models may be hidden).";
     } catch (const std::exception &e) {
         result.vertices.clear();
         result.error = QString::fromUtf8(e.what());
